@@ -658,24 +658,7 @@ async function openGradebook(assignmentId){
     const keyRes=await supabase.from('assignment_keys').select('answers').eq('assignment_id',asg.id).maybeSingle(); const key=(keyRes.data&&keyRes.data.answers)||{};
     const chosen=document.getElementById('gb-q-select').value;
     const list=qs.filter(q=>!chosen||String(q.id)===String(chosen));
-    const detailCards = list.map((q,i)=>{
-      const ans=String(answers[q.id]??'');
-      const gr=gm.get(gkey({student_id:sid,question_id:q.id}));
-      let auto='';
-      if(objective(q)&&key[q.id]!=null){
-        const exp=Array.isArray(key[q.id])?key[q.id]:[key[q.id]];
-        const norm=x=>String(x??'').trim().toLowerCase().replace(/\s+/g,' ');
-        auto=exp.some(x=>norm(x)===norm(ans))?'✓ Correct':'✗ Incorrect';
-      }
-      const markControl = q.type === 'long'
-        ? `<label style="font-size:.8rem">Marks <input data-gb-mark="${esc(q.id)}" type="number" min="0" max="${esc(q.points||1)}" step="0.01" value="${gr?.points_awarded??''}" style="width:90px"></label>`
-        : `<span style="font-size:.76rem;color:var(--text2)">Automatically graded</span>`;
-      const saveControl = q.type === 'long'
-        ? `<button class="btn btn-gold btn-sm" data-gb-save="${esc(q.id)}">Save</button>`
-        : '';
-      return `<div style="padding:.8rem 0;border-top:1px solid var(--border)"><div><b>Q${qs.indexOf(q)+1}.</b> ${esc(q.text||'')} <span style="color:var(--text2)">(${esc(q.points||1)} pt)</span></div><div style="margin:.45rem 0;color:var(--text2);font-size:.82rem"><b>Answer:</b> ${ans?esc(ans):'<i>No answer</i>'} ${auto?`<span class="qa-mark ${auto[0]==='✓'?'ok':'bad'}">${auto}</span>`:''}</div><div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">${markControl}<input data-gb-fb="${esc(q.id)}" placeholder="Question feedback (optional)" value="${esc(gr?.feedback||'')}" style="flex:1;min-width:240px">${saveControl}</div></div>`;
-    }).join('');
-    document.getElementById('gb-detail').innerHTML = `<div class="card" style="margin-top:.8rem"><div class="card-head"><h3>${esc(st.display_name||'Student')}</h3><span style="font-size:.8rem;color:var(--text2)">Final: ${r.score!=null?esc(r.score)+'%':'Not graded'}</span></div>${detailCards}</div>`;
+    document.getElementById('gb-detail').innerHTML = `<div class="card" style="margin-top:.8rem"><div class="card-head"><h3>${esc(st.display_name||'Student')}</h3><span style="font-size:.8rem;color:var(--text2)">Final: ${r.score!=null?esc(r.score)+'%':'Not graded'}</span></div>${list.map((q,i)=>{const ans=String(answers[q.id]??''); const gr=gm.get(gkey({student_id:sid,question_id:q.id})); let auto=''; if(objective(q)&&key[q.id]!=null){const exp=Array.isArray(key[q.id])?key[q.id]:[key[q.id]]; const norm=x=>String(x??'').trim().toLowerCase().replace(/\s+/g,' '); auto=exp.some(x=>norm(x)===norm(ans))?'✓ Correct':'✗ Incorrect';} const markControl=q.type==='long'?`<label style="font-size:.8rem">Marks <input data-gb-mark="${esc(q.id)}" type="number" min="0" max="${esc(q.points||1)}" step="0.01" value="${gr?.points_awarded??''}" style="width:90px"></label>`:`<span style="font-size:.76rem;color:var(--text2)">Automatically graded</span>`; const saveControl=q.type==='long'?`<button class="btn btn-gold btn-sm" data-gb-save="${esc(q.id)}">Save</button>`:''; return `<div style="padding:.8rem 0;border-top:1px solid var(--border)"><div><b>Q${qs.indexOf(q)+1}.</b> ${esc(q.text||'')} <span style="color:var(--text2)">(${esc(q.points||1)} pt)</span></div><div style="margin:.45rem 0;color:var(--text2);font-size:.82rem"><b>Answer:</b> ${ans?esc(ans):'<i>No answer</i>'} ${auto?`<span class="qa-mark ${auto[0]==='✓'?'ok':'bad'}">${auto}</span>`:''}</div><div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">${markControl}<input data-gb-fb="${esc(q.id)}" placeholder="Question feedback (optional)" value="${esc(gr?.feedback||'')}" style="flex:1;min-width:240px">${saveControl}</div></div>`;}).join('')}</div>`;
     document.querySelectorAll('[data-gb-save]').forEach(btn=>btn.onclick=async()=>{const qid=btn.dataset.gbSave; const markEl=document.querySelector('[data-gb-mark="'+CSS.escape(qid)+'"]'); const fbEl=document.querySelector('[data-gb-fb="'+CSS.escape(qid)+'"]'); const q=qs.find(x=>String(x.id)===String(qid)); const val=markEl.value.trim(); const payload={assignment_id:String(asg.id),student_id:sid,question_id:String(qid),points_awarded:val===''?null:Math.min(Number(q.points||1),Math.max(0,Number(val))),feedback:fbEl.value.trim()||null,graded_by:me.id,graded_at:new Date().toISOString()}; btn.disabled=true; const {error}=await supabase.from('assignment_question_grades').upsert(payload,{onConflict:'assignment_id,student_id,question_id'}); if(error){toast('Could not save: '+error.message,true);btn.disabled=false;return;} const rpc=await supabase.rpc('grade_assignment_submission',{p_assignment_id:String(asg.id),p_student_id:sid}); btn.disabled=false; if(rpc.error){toast('Saved, but final score could not be recalculated: '+rpc.error.message,true);} else {toast('Question mark saved ✓'); await openGradebook(asg.id); setTimeout(()=>showDetail(sid),80);}});
   };
   document.querySelectorAll('[data-gb-student]').forEach(b=>b.onclick=()=>showDetail(b.dataset.gbStudent));
@@ -1423,8 +1406,7 @@ async function saveQuestionToBank(q){
   if(!me) return; const text=String(q.text||'').trim(); if(!text){ toast('Type the question before saving it.',true); return; }
   const topic=prompt('Topic/category for this question:', 'General'); if(topic===null) return; let classLevel='';
   try{ const {data}=await supabase.from('classes').select('class_level,name').eq('id',currentClassId).maybeSingle(); classLevel=data?.class_level||data?.name||''; }catch{}
-  const payload={teacher_id:me.id,class_level:classLevel,topic:String(topic).trim()||'General',question:{type:q.type,text,options:Array.isArray(q.options)?q.options:[],correct:q.correct==null?null:q.correct,accepted:q.accepted||'',accepted_answers:String(q.accepted||'').split(/[,
-]/).map(x=>x.trim()).filter(Boolean),media_url:q.media_url||'',points:Math.max(0,Number(q.points??1)||0)}};
+  const payload={teacher_id:me.id,class_level:classLevel,topic:String(topic).trim()||'General',question:{type:q.type,text,options:Array.isArray(q.options)?q.options:[],correct:q.correct==null?null:q.correct,accepted:q.accepted||'',accepted_answers:String(q.accepted||'').split(/[,\n]/).map(x=>x.trim()).filter(Boolean),media_url:q.media_url||'',points:Math.max(0,Number(q.points??1)||0)}};
   const {error}=await supabase.from('question_bank').insert(payload); if(error) toast('Could not save to question bank: '+error.message,true); else toast('Saved to Question Bank ✓');
 }
 
