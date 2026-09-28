@@ -310,30 +310,73 @@ function genPin(){ return String(Math.floor(100000+Math.random()*900000)); }
 function slugify(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'').slice(0,20) || 'student'; }
 
 // ── ACCESS CHECK ──
-async function checkAccess(){
-  const { data: { session } } = await supabase.auth.getSession();
+// Keep the access screen from hanging forever if Supabase is slow, offline,
+// blocked by a browser extension, or returns an unexpected error.
+function withTimeout(promise, ms=12000, label='Request') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject)=>setTimeout(()=>reject(new Error(label+' timed out. Please check your internet connection and try again.')), ms))
+  ]);
+}
+
+function showAccessError(err){
   const gate = document.getElementById('gate-inner');
-  if(!session){
-    gate.innerHTML = `<div class="gate-icon">🔒</div><h2>${T('Please log in','ནང་འཛུལ་གནང་།')}</h2><p>${T('Log in with your SherigSpace account first, then come back here to set up your teacher plan.','དང་པ་ SherigSpace ཀྱི་ཐོ་བཀོད་ཐོག་ནང་འཛུལ་འབད་ཞིནམ་ལས་ལོག་འོང་སྟེ་སློབ་དཔོན་གྱི་འཆར་གཞི་གཞི་བཙུགས་འབད།')}</p><a class="gate-btn" href="login.html">${T('Go to Login','ནང་འཛུལ་ལུ་འགྱོ།')}</a>`;
-    return;
+  const msg = String(err?.message || err || 'Unknown error');
+  console.error('SherigSpace teacher access error:', err);
+  gate.innerHTML = `
+    <div class="gate-icon">⚠️</div>
+    <h2>${typeof T==='function' ? T('Could not check access','འཛུལ་སྒོ་ཞིབ་དཔྱད་འབད་མ་ཚུགས།') : 'Could not check access'}</h2>
+    <p>${typeof T==='function' ? T('SherigSpace could not connect to the account service. Please try again.','SherigSpace གིས་ཁ་ཡིག་ཞབས་ཏོག་ལུ་མཐུད་མ་ཚུགས། ལོག་སྟེ་འབད་གནང་།') : 'SherigSpace could not connect to the account service. Please try again.'}</p>
+    <div style="font-size:.74rem;color:var(--text2);margin:-.5rem 0 1rem;word-break:break-word">${esc(msg)}</div>
+    <div style="display:flex;gap:.6rem;flex-direction:column">
+      <button class="gate-btn" type="button" onclick="checkAccess()">🔄 ${typeof T==='function' ? T('Try Again','ལོག་སྟེ་འབད།') : 'Try Again'}</button>
+      <a class="gate-btn" href="login.html" style="background:transparent;color:var(--gold);border:1px solid var(--border)">${typeof T==='function' ? T('Go to Login','ནང་འཛུལ་ལུ་འགྱོ།') : 'Go to Login'}</a>
+    </div>`;
+}
+
+async function checkAccess(){
+  const gate = document.getElementById('gate-inner');
+  try {
+    gate.innerHTML = `<div class="gate-icon">🍎</div><h2>${typeof T==='function' ? T('Checking access…','འཛུལ་སྒོ་ཞིབ་དཔྱད་འབད་བཞིནམ...') : 'Checking access…'}</h2><p>${typeof T==='function' ? T('One moment…','སྐར་ཆ་ཅིག...') : 'One moment…'}</p>`;
+
+    const sessionResult = await withTimeout(supabase.auth.getSession(), 12000, 'Authentication check');
+    const session = sessionResult?.data?.session || null;
+
+    if(!session){
+      gate.innerHTML = `<div class="gate-icon">🔒</div><h2>${T('Please log in','ནང་འཛུལ་གནང་།')}</h2><p>${T('Log in with your SherigSpace account first, then come back here to set up your teacher plan.','དང་པ་ SherigSpace ཀྱི་ཐོ་བཀོད་ཐོག་ནང་འཛུལ་འབད་ཞིནམ་ལས་ལོག་འོང་སྟེ་སློབ་དཔོན་གྱི་འཆར་གཞི་གཞི་བཙུགས་འབད།')}</p><a class="gate-btn" href="login.html">${T('Go to Login','ནང་འཛུལ་ལུ་འགྱོ།')}</a>`;
+      return;
+    }
+
+    const { data: profile, error: profileError } = await withTimeout(
+      supabase.from('profiles').select('*').eq('id', session.user.id).single(),
+      12000, 'Profile check'
+    );
+    if(profileError && profileError.code !== 'PGRST116') throw profileError;
+    me = { id: session.user.id, name: profile?.name || session.user.email, email: session.user.email };
+
+    const { data: sub, error: subError } = await withTimeout(
+      supabase.from('teacher_subscriptions').select('*').eq('teacher_id', me.id).order('created_at',{ascending:false}).limit(1).maybeSingle(),
+      12000, 'Subscription check'
+    );
+    if(subError) console.warn('Subscription check:', subError);
+    subRow = sub || null;
+    subActive = !!(sub && sub.status === 'approved' && (!sub.expires_at || new Date(sub.expires_at) > new Date()));
+
+    const { data: settings, error: settingsError } = await withTimeout(
+      supabase.from('site_settings').select('*').eq('id',1).single(),
+      12000, 'Site settings check'
+    );
+    if(settingsError) console.warn('Site settings check:', settingsError);
+    siteSettings = settings || {};
+
+    // Everyone gets in — the Free plan is enforced when creating classes/students.
+    document.getElementById('gate').classList.add('hide');
+    document.getElementById('app-layout').style.display = 'flex';
+    await renderClasses();
+    renderBilling(subRow);
+  } catch(err) {
+    showAccessError(err);
   }
-  const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-  me = { id: session.user.id, name: profile?.name || session.user.email, email: session.user.email };
-
-  const { data: sub } = await supabase.from('teacher_subscriptions')
-    .select('*').eq('teacher_id', me.id).order('created_at',{ascending:false}).limit(1).maybeSingle();
-  subRow = sub;
-  subActive = !!(sub && sub.status === 'approved' && (!sub.expires_at || new Date(sub.expires_at) > new Date()));
-
-  const { data: settings } = await supabase.from('site_settings').select('*').eq('id',1).single();
-  siteSettings = settings || {};
-
-  // Everyone gets in — the Free plan (1 class / 20 students) is enforced at
-  // the point of creating a class or adding a student, not at the door.
-  document.getElementById('gate').classList.add('hide');
-  document.getElementById('app-layout').style.display = 'flex';
-  renderClasses();
-  renderBilling(sub);
 }
 
 window.submitTeacherProof = async function(){
